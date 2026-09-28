@@ -11,7 +11,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package transport
+package stream
 
 import (
 	"errors"
@@ -22,16 +22,19 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/dapr/dapr/pkg/actors/internal/placement/loops"
+	"github.com/dapr/dapr/pkg/actors/internal/placement/loops/stream/transport"
 )
 
 type closingTransport struct {
-	Transport
+	transport.Transport
 	closeSend func() error
 }
 
 func (c *closingTransport) CloseSend() error { return c.closeSend() }
 
-func TestSessionCloseReleasesConnection(t *testing.T) {
+func TestShutdownClosesConnection(t *testing.T) {
 	t.Parallel()
 
 	for _, closeErr := range []error{nil, errors.New("stream already closed")} {
@@ -47,38 +50,18 @@ func TestSessionCloseReleasesConnection(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { conn.Close() })
 				var closed bool
-				stream := NewSession(&closingTransport{closeSend: func() error {
-					closed = true
-					return closeErr
-				}}, conn)
+				s := &stream{
+					channel: &closingTransport{closeSend: func() error {
+						closed = true
+						return closeErr
+					}},
+					conn: conn,
+				}
 				assert.NotEqual(t, connectivity.Shutdown, conn.GetState(), "an active stream must retain its connection")
-				// The stream loop calls Close on reconnect, dissemination timeout,
-				// and shutdown, including when its receive loop is still blocked.
-				err = stream.Close()
-				require.ErrorIs(t, err, closeErr)
+				s.handleShutdown(&loops.Shutdown{Error: errors.New("connection lost")})
 				assert.True(t, closed)
 				assert.Equal(t, connectivity.Shutdown, conn.GetState(), "stream teardown must release the gRPC channel")
 			}
 		})
 	}
-}
-
-func TestSessionCloseSendPreservesConnection(t *testing.T) {
-	t.Parallel()
-
-	conn, err := grpc.NewClient("passthrough:///test-placement", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
-	var closed bool
-	stream := NewSession(&closingTransport{closeSend: func() error {
-		closed = true
-		return nil
-	}}, conn)
-
-	require.NoError(t, stream.CloseSend())
-	assert.True(t, closed)
-	assert.NotEqual(t, connectivity.Shutdown, conn.GetState(), "half-close must preserve the connection for receiving")
-
-	require.NoError(t, stream.Close())
-	assert.Equal(t, connectivity.Shutdown, conn.GetState())
 }

@@ -232,7 +232,8 @@ func (p *placement) handleLockRequest(req *loops.LockRequest) {
 }
 
 func (p *placement) handleReconnect(ctx context.Context, recon *loops.PlacementReconnect) error {
-	var client transport.Session
+	var client transport.Transport
+	var conn *grpc.ClientConn
 	var err error
 	var unavailableLogged bool
 	adoptFallback := func() {
@@ -255,7 +256,7 @@ func (p *placement) handleReconnect(ctx context.Context, recon *loops.PlacementR
 			cctx, ccancel = context.WithCancelCause(ctx)
 			timer = time.AfterFunc(p.startupWait, func() { ccancel(errStartupTimeout) })
 		}
-		client, err = p.tryConnect(ctx, cctx)
+		client, conn, err = p.tryConnect(ctx, cctx)
 		if timer != nil {
 			timer.Stop()
 		}
@@ -364,6 +365,7 @@ func (p *placement) handleReconnect(ctx context.Context, recon *loops.PlacementR
 		Namespace:            p.namespace,
 		Inflight:             p.inflight,
 		Channel:              client,
+		Conn:                 conn,
 		PlacementLoop:        p.loop,
 		IDx:                  p.idx,
 		ActorTable:           p.actorTable,
@@ -469,17 +471,19 @@ func (p *placement) handleSetDrainOngoingCallTimeout(event *loops.SetDrainOngoin
 	p.inflight.SetDrainOngoingCallTimeout(event.Drain, event.Timeout)
 }
 
-func (p *placement) tryConnect(ctx, connectCtx context.Context) (transport.Session, error) {
+// tryConnect returns a stream and its dedicated connection. On success, the
+// caller transfers connection ownership to the stream loop for shutdown.
+func (p *placement) tryConnect(ctx, connectCtx context.Context) (transport.Transport, *grpc.ClientConn, error) {
 	conn, err := p.connector.Connect(connectCtx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to placement service: %w", err)
+		return nil, nil, fmt.Errorf("failed to connect to placement service: %w", err)
 	}
 
 	client, err := p.streamFactory(ctx, conn)
 	if err != nil {
 		conn.Close()
-		return nil, fmt.Errorf("failed to open stream to placement service: %w", err)
+		return nil, nil, fmt.Errorf("failed to open stream to placement service: %w", err)
 	}
 
-	return transport.NewSession(client, conn), nil
+	return client, conn, nil
 }

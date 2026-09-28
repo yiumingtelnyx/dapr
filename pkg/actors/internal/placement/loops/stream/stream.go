@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"sync"
 
+	"google.golang.org/grpc"
+
 	"github.com/dapr/dapr/pkg/actors/internal/placement/loops"
 	"github.com/dapr/dapr/pkg/actors/internal/placement/loops/stream/transport"
 	"github.com/dapr/kit/events/loop"
@@ -34,13 +36,17 @@ var (
 )
 
 type Options struct {
-	Channel       transport.Session
+	Channel transport.Transport
+	// Conn is the dedicated connection for Channel. The stream loop owns it
+	// and closes it during shutdown, before waiting for its receive loop.
+	Conn          *grpc.ClientConn
 	PlacementLoop loop.Interface[loops.EventPlace]
 	IDx           uint64
 }
 
 type stream struct {
-	channel   transport.Session
+	channel   transport.Transport
+	conn      *grpc.ClientConn
 	placeLoop loop.Interface[loops.EventPlace]
 	idx       uint64
 
@@ -52,6 +58,7 @@ type stream struct {
 func New(ctx context.Context, opts Options) loop.Interface[loops.EventStream] {
 	stream := streamCache.Get().(*stream)
 	stream.channel = opts.Channel
+	stream.conn = opts.Conn
 	stream.placeLoop = opts.PlacementLoop
 	stream.idx = opts.IDx
 
@@ -106,7 +113,10 @@ func (s *stream) handleShutdown(e *loops.Shutdown) {
 	} else {
 		log.Infof("Closing connection to placement: %s", e.Error)
 	}
-	s.channel.Close()
+	s.channel.CloseSend()
+	// CloseSend only half-closes the RPC. Close the connection as well to
+	// release gRPC workers and unblock Recv, even if CloseSend failed.
+	s.conn.Close()
 	s.wg.Wait()
 	streamCache.Put(s)
 }

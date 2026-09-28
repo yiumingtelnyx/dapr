@@ -22,7 +22,7 @@ import (
 )
 
 // Transport is a single established placement stream. It does not own the
-// underlying gRPC connection; use a Session to manage the connection lifetime.
+// underlying gRPC connection; the stream loop owns and closes that connection.
 type Transport interface {
 	// Recv blocks for the next placement order from the server. It returns
 	// an error for malformed or unknown messages, which closes the stream.
@@ -37,17 +37,4 @@ type Transport interface {
 	// CloseSend closes only the sending side of the stream. It does not
 	// release the underlying connection or guarantee that Recv returns.
 	CloseSend() error
-}
-
-// Session owns a placement stream and its dedicated gRPC connection.
-// The stream loop must call Close when the session ends, before waiting for
-// its receive loop. Both placement protocol versions use this contract.
-type Session interface {
-	Transport
-
-	// Close ends the RPC and closes the underlying connection, releasing
-	// its background goroutines and unblocking Recv even if the peer does
-	// not respond to CloseSend. It must close the connection even when
-	// closing the sending side fails.
-	Close() error
 }

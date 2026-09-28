@@ -20,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"google.golang.org/grpc"
+
 	"github.com/dapr/dapr/pkg/actors/internal/placement/loops"
 	"github.com/dapr/dapr/pkg/actors/internal/placement/loops/disseminator/inflight"
 	"github.com/dapr/dapr/pkg/actors/internal/placement/loops/disseminator/timeout"
@@ -41,8 +43,10 @@ var (
 	}}
 )
 
+// Options passes ownership of Conn to the stream loop.
 type Options struct {
-	Channel       transport.Session
+	Channel       transport.Transport
+	Conn          *grpc.ClientConn
 	PlacementLoop loop.Interface[loops.EventPlace]
 	ActorTable    table.Interface
 	Scheduler     schedclient.Reloader
@@ -129,6 +133,7 @@ func New(ctx context.Context, opts Options) loop.Interface[loops.EventDiss] {
 	})
 	diss.streamLoop = stream.New(ctx, stream.Options{
 		Channel:       opts.Channel,
+		Conn:          opts.Conn,
 		PlacementLoop: opts.PlacementLoop,
 		IDx:           opts.IDx,
 	})

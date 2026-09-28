@@ -27,9 +27,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/dapr/dapr/pkg/actors/internal/placement/loops"
+	streamloop "github.com/dapr/dapr/pkg/actors/internal/placement/loops/stream"
 	"github.com/dapr/dapr/pkg/actors/internal/placement/loops/stream/transport"
 	transportv1 "github.com/dapr/dapr/pkg/actors/internal/placement/loops/stream/transport/v1"
 	v1pb "github.com/dapr/dapr/pkg/proto/placement/v1"
+	loopfake "github.com/dapr/kit/events/loop/fake"
 )
 
 type connectionConnector struct{ conn *grpc.ClientConn }
@@ -55,9 +58,10 @@ func TestTryConnectClosesFailedConnection(t *testing.T) {
 						return nil, streamErr
 					},
 				}
-				stream, err := p.tryConnect(t.Context(), t.Context())
+				stream, returnedConn, err := p.tryConnect(t.Context(), t.Context())
 				require.ErrorIs(t, err, streamErr)
 				assert.Nil(t, stream)
+				assert.Nil(t, returnedConn)
 				assert.Equal(t, connectivity.Shutdown, conn.GetState(), "failed attempts must release the gRPC channel")
 			}
 		})
@@ -107,21 +111,33 @@ func TestPlacementStreamCloseUnblocksRecv(t *testing.T) {
 			return transportv1.New(transportv1.Options{Channel: channel}), nil
 		},
 	}
-	stream, err := p.tryConnect(ctx, ctx)
+	channel, returnedConn, err := p.tryConnect(ctx, ctx)
 	require.NoError(t, err)
 	select {
 	case <-service.connected:
 	case <-ctx.Done():
 		t.Fatal("placement server did not receive the stream")
 	}
-	recvDone := make(chan error, 1)
-	go func() { _, recvErr := stream.Recv(); recvDone <- recvErr }()
-	require.NoError(t, stream.Close())
-	assert.Equal(t, connectivity.Shutdown, conn.GetState())
+	assert.Same(t, conn, returnedConn)
+	assert.NotEqual(t, connectivity.Shutdown, conn.GetState())
+	stream := streamloop.New(ctx, streamloop.Options{
+		Channel:       channel,
+		Conn:          returnedConn,
+		PlacementLoop: loopfake.New[loops.EventPlace](),
+	})
+	runDone := make(chan error, 1)
+	go func() { runDone <- stream.Run(ctx) }()
+	closeDone := make(chan struct{})
+	go func() {
+		stream.Close(&loops.Shutdown{Error: errors.New("connection lost")})
+		close(closeDone)
+	}()
 	select {
-	case err = <-recvDone:
-		require.Error(t, err)
+	case <-closeDone:
+		require.NoError(t, ctx.Err(), "shutdown must unblock Recv without waiting for the RPC deadline")
 	case <-ctx.Done():
 		t.Fatal("stream teardown did not unblock Recv")
 	}
+	require.NoError(t, <-runDone)
+	assert.Equal(t, connectivity.Shutdown, conn.GetState())
 }
