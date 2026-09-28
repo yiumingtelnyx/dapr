@@ -232,7 +232,7 @@ func (p *placement) handleLockRequest(req *loops.LockRequest) {
 }
 
 func (p *placement) handleReconnect(ctx context.Context, recon *loops.PlacementReconnect) error {
-	var client transport.Transport
+	var client transport.Session
 	var err error
 	var unavailableLogged bool
 	adoptFallback := func() {
@@ -469,7 +469,7 @@ func (p *placement) handleSetDrainOngoingCallTimeout(event *loops.SetDrainOngoin
 	p.inflight.SetDrainOngoingCallTimeout(event.Drain, event.Timeout)
 }
 
-func (p *placement) tryConnect(ctx, connectCtx context.Context) (transport.Transport, error) {
+func (p *placement) tryConnect(ctx, connectCtx context.Context) (transport.Session, error) {
 	conn, err := p.connector.Connect(connectCtx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to placement service: %w", err)
@@ -481,17 +481,5 @@ func (p *placement) tryConnect(ctx, connectCtx context.Context) (transport.Trans
 		return nil, fmt.Errorf("failed to open stream to placement service: %w", err)
 	}
 
-	return &placementStream{Transport: client, conn: conn}, nil
-}
-
-// placementStream owns the connection for one placement session. Stream
-// teardown must close the channel as well as the RPC: CloseSend alone leaves
-// gRPC's background goroutines alive, even after the channel becomes idle.
-type placementStream struct {
-	transport.Transport
-	conn *grpc.ClientConn
-}
-
-func (s *placementStream) CloseSend() error {
-	return errors.Join(s.Transport.CloseSend(), s.conn.Close())
+	return transport.NewSession(client, conn), nil
 }

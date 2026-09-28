@@ -42,7 +42,7 @@ var (
 )
 
 type Options struct {
-	Channel       transport.Transport
+	Channel       transport.Session
 	PlacementLoop loop.Interface[loops.EventPlace]
 	ActorTable    table.Interface
 	Scheduler     schedclient.Reloader

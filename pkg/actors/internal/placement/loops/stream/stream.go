@@ -34,13 +34,13 @@ var (
 )
 
 type Options struct {
-	Channel       transport.Transport
+	Channel       transport.Session
 	PlacementLoop loop.Interface[loops.EventPlace]
 	IDx           uint64
 }
 
 type stream struct {
-	channel   transport.Transport
+	channel   transport.Session
 	placeLoop loop.Interface[loops.EventPlace]
 	idx       uint64
 
@@ -106,7 +106,7 @@ func (s *stream) handleShutdown(e *loops.Shutdown) {
 	} else {
 		log.Infof("Closing connection to placement: %s", e.Error)
 	}
-	s.channel.CloseSend()
+	s.channel.Close()
 	s.wg.Wait()
 	streamCache.Put(s)
 }

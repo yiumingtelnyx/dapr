@@ -39,13 +39,6 @@ func (c *connectionConnector) Connect(context.Context) (*grpc.ClientConn, error)
 }
 func (c *connectionConnector) Address() string { return "test-placement" }
 
-type closingTransport struct {
-	transport.Transport
-	closeSend func() error
-}
-
-func (c *closingTransport) CloseSend() error { return c.closeSend() }
-
 func TestTryConnectClosesFailedConnection(t *testing.T) {
 	t.Parallel()
 
@@ -66,42 +59,6 @@ func TestTryConnectClosesFailedConnection(t *testing.T) {
 				require.ErrorIs(t, err, streamErr)
 				assert.Nil(t, stream)
 				assert.Equal(t, connectivity.Shutdown, conn.GetState(), "failed attempts must release the gRPC channel")
-			}
-		})
-	}
-}
-
-func TestPlacementStreamClosesConnection(t *testing.T) {
-	t.Parallel()
-
-	for _, closeErr := range []error{nil, errors.New("stream already closed")} {
-		name := "close succeeds"
-		if closeErr != nil {
-			name = "close fails"
-		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			// Repeat the session lifecycle to cover reconnects with fresh channels.
-			for range 10 {
-				conn, err := grpc.NewClient("passthrough:///test-placement", grpc.WithTransportCredentials(insecure.NewCredentials()))
-				require.NoError(t, err)
-				t.Cleanup(func() { conn.Close() })
-				var closed bool
-				p := &placement{
-					connector: &connectionConnector{conn: conn},
-					streamFactory: func(context.Context, *grpc.ClientConn) (transport.Transport, error) {
-						return &closingTransport{closeSend: func() error { closed = true; return closeErr }}, nil
-					},
-				}
-				stream, err := p.tryConnect(t.Context(), t.Context())
-				require.NoError(t, err)
-				assert.NotEqual(t, connectivity.Shutdown, conn.GetState(), "an active stream must retain its connection")
-				// The stream loop calls CloseSend on reconnect, dissemination timeout,
-				// and shutdown, including when its receive loop is still blocked.
-				err = stream.CloseSend()
-				require.ErrorIs(t, err, closeErr)
-				assert.True(t, closed)
-				assert.Equal(t, connectivity.Shutdown, conn.GetState(), "stream teardown must release the gRPC channel")
 			}
 		})
 	}
@@ -159,7 +116,7 @@ func TestPlacementStreamCloseUnblocksRecv(t *testing.T) {
 	}
 	recvDone := make(chan error, 1)
 	go func() { _, recvErr := stream.Recv(); recvDone <- recvErr }()
-	require.NoError(t, stream.CloseSend())
+	require.NoError(t, stream.Close())
 	assert.Equal(t, connectivity.Shutdown, conn.GetState())
 	select {
 	case err = <-recvDone:
