@@ -21,7 +21,8 @@ import (
 	"github.com/dapr/dapr/pkg/actors/internal/placement/loops"
 )
 
-// Transport is a single established placement stream.
+// Transport is a single established placement stream. It does not own the
+// underlying gRPC connection; the stream loop owns and closes that connection.
 type Transport interface {
 	// Recv blocks for the next placement order from the server. It returns
 	// an error for malformed or unknown messages, which closes the stream.
@@ -33,6 +34,7 @@ type Transport interface {
 	// SendAck acknowledges a placement order phase.
 	SendAck(*loops.Ack) error
 
-	// CloseSend closes the sending side of the stream.
+	// CloseSend closes only the sending side of the stream. It does not
+	// release the underlying connection or guarantee that Recv returns.
 	CloseSend() error
 }
